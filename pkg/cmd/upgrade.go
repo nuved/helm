@@ -290,6 +290,7 @@ func newUpgradeCmd(cfg *action.Configuration, out io.Writer) *cobra.Command {
 	f.BoolVar(&client.RollbackOnFailure, "rollback-on-failure", false, "if set, Helm will rollback the upgrade to previous success release upon failure. The --wait flag will be defaulted to \"watcher\" if --rollback-on-failure is set")
 	f.BoolVar(&client.RollbackOnFailure, "atomic", false, "deprecated")
 	f.MarkDeprecated("atomic", "use --rollback-on-failure instead")
+	f.BoolVar(&client.ShowLogsOnFailure, "show-logs-on-failure", false, "if set, print recent pod logs and warning events for resources that fail to become ready before Helm returns the failure. Off by default; may expose secrets present in logs")
 	f.IntVar(&client.MaxHistory, "history-max", settings.MaxHistory, "limit the maximum number of revisions saved per release. Use 0 for no limit")
 	f.BoolVar(&client.CleanupOnFail, "cleanup-on-fail", false, "allow deletion of new resources created in this upgrade when upgrade fails")
 	f.BoolVar(&client.SubNotes, "render-subchart-notes", false, "if set, render subchart notes along with the parent")
