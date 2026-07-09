@@ -59,6 +59,9 @@ type Rollback struct {
 	ServerSideApply string
 	CleanupOnFail   bool
 	MaxHistory      int // MaxHistory limits the maximum number of revisions saved per release
+	// ToLastDeployed rolls back to the last successfully DEPLOYED revision
+	// instead of the immediately previous one.
+	ToLastDeployed bool
 }
 
 // NewRollback creates a new Rollback object with the given configuration.
@@ -128,7 +131,19 @@ func (r *Rollback) prepareRollback(name string) (*release.Release, *release.Rele
 
 	previousVersion := r.Version
 	if r.Version == 0 {
-		previousVersion = currentRelease.Version - 1
+		if r.ToLastDeployed {
+			deployedi, derr := r.cfg.Releases.Deployed(name)
+			if derr != nil {
+				return nil, nil, false, fmt.Errorf("no deployed (healthy) revision to roll back to for release %q; if the release is unrecoverable, use 'helm uninstall %s': %w", name, name, derr)
+			}
+			deployed, cerr := releaserToV1Release(deployedi)
+			if cerr != nil {
+				return nil, nil, false, cerr
+			}
+			previousVersion = deployed.Version
+		} else {
+			previousVersion = currentRelease.Version - 1
+		}
 	}
 
 	historyReleases, err := r.cfg.Releases.History(name)
