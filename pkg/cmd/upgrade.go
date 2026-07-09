@@ -291,6 +291,7 @@ func newUpgradeCmd(cfg *action.Configuration, out io.Writer) *cobra.Command {
 	f.BoolVar(&client.RollbackOnFailure, "atomic", false, "deprecated")
 	f.MarkDeprecated("atomic", "use --rollback-on-failure instead")
 	f.BoolVar(&client.ShowLogsOnFailure, "show-logs-on-failure", false, "if set, print recent pod logs and warning events for resources that fail to become ready before Helm returns the failure. Off by default; may expose secrets present in logs")
+	f.BoolVar(&client.RecoverPending, "recover-pending", false, "if the release is stuck in a pending state (e.g. Helm was killed mid-operation), mark it failed and proceed. Only use when no other Helm operation is running against this release")
 	f.IntVar(&client.MaxHistory, "history-max", settings.MaxHistory, "limit the maximum number of revisions saved per release. Use 0 for no limit")
 	f.BoolVar(&client.CleanupOnFail, "cleanup-on-fail", false, "allow deletion of new resources created in this upgrade when upgrade fails")
 	f.BoolVar(&client.SubNotes, "render-subchart-notes", false, "if set, render subchart notes along with the parent")
