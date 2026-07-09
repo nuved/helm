@@ -108,6 +108,10 @@ type Upgrade struct {
 	// ShowLogsOnFailure prints recent pod logs and warning events for resources
 	// that fail to become ready, before the failure/rollback path runs.
 	ShowLogsOnFailure bool
+	// RecoverPending clears a release stuck in a pending state (e.g. Helm was
+	// killed mid-operation) by marking it failed before upgrading. Only safe
+	// when no other Helm operation is running against the release.
+	RecoverPending bool
 	// CleanupOnFail will, if true, cause the upgrade to delete newly-created resources on a failed update.
 	CleanupOnFail bool
 	// SubNotes determines whether sub-notes are rendered in the chart.
@@ -248,7 +252,15 @@ func (u *Upgrade) prepareUpgrade(ctx context.Context, name string, chart *chartv
 
 	// Concurrent `helm upgrade`s will either fail here with `errPending` or when creating the release with "already exists". This should act as a pessimistic lock.
 	if lastRelease.Info.Status.IsPending() {
-		return nil, nil, false, errPending
+		if u.RecoverPending {
+			u.cfg.Logger().Debug("recover-pending: marking stuck release failed", "name", name, "version", lastRelease.Version)
+			lastRelease.SetStatus(rcommon.StatusFailed, "marked failed by --recover-pending")
+			if uerr := u.cfg.Releases.Update(lastRelease); uerr != nil {
+				return nil, nil, false, uerr
+			}
+		} else {
+			return nil, nil, false, errPending
+		}
 	}
 
 	var currentRelease *release.Release
