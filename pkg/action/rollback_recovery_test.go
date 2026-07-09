@@ -41,3 +41,25 @@ func TestRollback_ToLastDeployed(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, target.Info.RollbackRevision) // last DEPLOYED revision was v2
 }
+
+func TestRollback_RecoverPending(t *testing.T) {
+	config := actionConfigFixture(t)
+	deployed := namedReleaseStub("angry-panda", rcommon.StatusDeployed)
+	deployed.Version = 1
+	require.NoError(t, config.Releases.Create(deployed))
+	stuck := namedReleaseStub("angry-panda", rcommon.StatusPendingUpgrade)
+	stuck.Version = 2
+	require.NoError(t, config.Releases.Create(stuck))
+
+	rb := NewRollback(config)
+	rb.RecoverPending = true
+	rb.ToLastDeployed = true
+	_, _, _, err := rb.prepareRollback("angry-panda")
+	require.NoError(t, err)
+
+	got, err := config.Releases.Get("angry-panda", 2)
+	require.NoError(t, err)
+	v2, err := releaserToV1Release(got)
+	require.NoError(t, err)
+	require.Equal(t, rcommon.StatusFailed, v2.Info.Status) // stuck pending release cleared to failed
+}
