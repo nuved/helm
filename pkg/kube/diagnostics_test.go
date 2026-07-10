@@ -67,10 +67,10 @@ func TestCollectFailureDiagnostics(t *testing.T) {
 	var buf bytes.Buffer
 	c.CollectFailureDiagnostics(context.Background(), resources, "ns", &buf, DefaultDiagnosticsOptions())
 	got := buf.String()
-	require.Contains(t, got, "badapp-1")                 // pod found via the Deployment's selector
-	require.Contains(t, got, "Readiness probe failed")   // Warning event surfaced
-	require.NotContains(t, got, "Successfully assigned") // Normal event filtered out
-	require.Contains(t, got, "fake logs")                // fake clientset log body streamed
+	require.Contains(t, got, "==> pod/badapp-1")                                  // pod found via the Deployment's selector
+	require.Contains(t, got, "[event] Warning Unhealthy: Readiness probe failed") // Warning event surfaced
+	require.NotContains(t, got, "Successfully assigned")                          // Normal event filtered out
+	require.Contains(t, got, "[log:app] fake logs")                               // fake clientset log body streamed
 }
 
 func TestCollectFailureDiagnostics_EventsForbiddenFailsOpen(t *testing.T) {

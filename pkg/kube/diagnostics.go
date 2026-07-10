@@ -17,6 +17,7 @@ limitations under the License.
 package kube
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -50,6 +51,15 @@ func DefaultDiagnosticsOptions() DiagnosticsOptions {
 // error is written inline and does not stop collection, and it never returns an
 // error. This lets callers invoke it from a failure path without introducing a
 // new failure mode.
+//
+// Output is line-oriented and self-labeling so events and logs can be told
+// apart at a glance and filtered with grep:
+//
+//	==> failure diagnostics (--show-logs-on-failure): 3 pod(s) not ready
+//	==> pod/web-abc
+//	    [event] Warning Unhealthy: Readiness probe failed
+//	    [log:app] starting app...
+//	    [log:app] sh: myapp-server: not found
 func (c *Client) CollectFailureDiagnostics(ctx context.Context, resources ResourceList, namespace string, out io.Writer, opts DiagnosticsOptions) {
 	if opts.MaxPods <= 0 {
 		opts.MaxPods = 5
@@ -59,16 +69,24 @@ func (c *Client) CollectFailureDiagnostics(ctx context.Context, resources Resour
 	}
 
 	pods := c.podsForResources(resources, namespace, out)
-	if len(pods) > opts.MaxPods {
-		fmt.Fprintf(out, "==> showing first %d of %d pods (truncated)\n", opts.MaxPods, len(pods))
-		pods = pods[:opts.MaxPods]
+	total := len(pods)
+	if total == 0 {
+		return
+	}
+	shown := pods
+	if total > opts.MaxPods {
+		shown = pods[:opts.MaxPods]
 	}
 
-	for i := range pods {
-		p := &pods[i]
+	fmt.Fprintf(out, "==> failure diagnostics (--show-logs-on-failure): %d pod(s) not ready\n", total)
+	for i := range shown {
+		p := &shown[i]
 		fmt.Fprintf(out, "==> pod/%s\n", p.Name)
 		c.writeWarningEvents(ctx, p.Name, p.Namespace, opts.Since, out)
 		c.writePodLogs(ctx, p, opts.TailLines, out)
+	}
+	if total > len(shown) {
+		fmt.Fprintf(out, "==> (showing first %d of %d pods; %d more omitted)\n", len(shown), total, total-len(shown))
 	}
 }
 
@@ -85,7 +103,7 @@ func (c *Client) podsForResources(resources ResourceList, namespace string, out 
 		}
 		list, err := c.GetPodList(namespace, metav1.ListOptions{LabelSelector: s.String()})
 		if err != nil {
-			fmt.Fprintf(out, "  could not list pods: %v\n", err)
+			fmt.Fprintf(out, "    could not list pods: %v\n", err)
 			return
 		}
 		for _, p := range list.Items {
@@ -118,32 +136,36 @@ func (c *Client) podsForResources(resources ResourceList, namespace string, out 
 	return pods
 }
 
-// writePodLogs streams the last tail lines of every container in pod to out.
+// writePodLogs streams the last tail lines of every container in pod to out,
+// tagging each line with [log:<container>] so it is unambiguous.
 func (c *Client) writePodLogs(ctx context.Context, pod *v1.Pod, tail int64, out io.Writer) {
 	for _, container := range pod.Spec.Containers {
-		fmt.Fprintf(out, "  logs pod/%s [%s] (last %d lines):\n", pod.Name, container.Name, tail)
 		req := c.kubeClient.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, &v1.PodLogOptions{
 			Container: container.Name,
 			TailLines: &tail,
 		})
 		stream, err := req.Stream(ctx)
 		if err != nil {
-			fmt.Fprintf(out, "    could not fetch logs: %v\n", err)
+			fmt.Fprintf(out, "    [log:%s] could not fetch logs: %v\n", container.Name, err)
 			continue
 		}
-		_, _ = io.Copy(out, stream)
+		sc := bufio.NewScanner(stream)
+		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for sc.Scan() {
+			fmt.Fprintf(out, "    [log:%s] %s\n", container.Name, sc.Text())
+		}
 		_ = stream.Close()
 	}
 }
 
 // writeWarningEvents lists Warning events involving the named object and writes
-// those within the since window to out, oldest first.
+// those within the since window to out, oldest first, tagged with [event].
 func (c *Client) writeWarningEvents(ctx context.Context, name, namespace string, since time.Time, out io.Writer) {
 	list, err := c.kubeClient.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
 		FieldSelector: fmt.Sprintf("involvedObject.name=%s", name),
 	})
 	if err != nil {
-		fmt.Fprintf(out, "  could not fetch events for %s: %v\n", name, err)
+		fmt.Fprintf(out, "    [event] could not fetch events for %s: %v\n", name, err)
 		return
 	}
 	events := list.Items
@@ -159,6 +181,6 @@ func (c *Client) writeWarningEvents(ctx context.Context, name, namespace string,
 		if !since.IsZero() && e.LastTimestamp.Time.Before(since) {
 			continue
 		}
-		fmt.Fprintf(out, "  Warning %s: %s\n", e.Reason, e.Message)
+		fmt.Fprintf(out, "    [event] Warning %s: %s\n", e.Reason, e.Message)
 	}
 }
