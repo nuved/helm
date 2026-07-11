@@ -107,7 +107,10 @@ type Install struct {
 	Description      string
 	OutputDir        string
 	// RollbackOnFailure enables rolling back (uninstalling) the release on failure if set
-	RollbackOnFailure        bool
+	RollbackOnFailure bool
+	// ShowLogsOnFailure prints recent pod logs and warning events for resources
+	// that fail to become ready, before the failure/rollback path runs.
+	ShowLogsOnFailure        bool
 	SkipCRDs                 bool
 	SubNotes                 bool
 	HideNotes                bool
@@ -345,7 +348,7 @@ func (i *Install) RunWithContext(ctx context.Context, ch ci.Charter, vals map[st
 
 	// Make sure if RollbackOnFailure is set, that wait is set as well. This makes it so
 	// the user doesn't have to specify both
-	if i.WaitStrategy == kube.HookOnlyStrategy && i.RollbackOnFailure {
+	if i.WaitStrategy == kube.HookOnlyStrategy && (i.RollbackOnFailure || i.ShowLogsOnFailure) {
 		i.WaitStrategy = kube.StatusWatcherStrategy
 	}
 
@@ -579,6 +582,9 @@ func (i *Install) performInstall(rel *release.Release, toBeAdopted kube.Resource
 }
 
 func (i *Install) failRelease(rel *release.Release, err error) (*release.Release, error) {
+	if i.ShowLogsOnFailure {
+		i.cfg.showFailureDiagnostics(rel, nil, i.Timeout)
+	}
 	rel.SetStatus(rcommon.StatusFailed, fmt.Sprintf("Release %q failed: %s", i.ReleaseName, err.Error()))
 	if i.RollbackOnFailure {
 		i.cfg.Logger().Debug("install failed and rollback-on-failure is set, uninstalling release", "release", i.ReleaseName)

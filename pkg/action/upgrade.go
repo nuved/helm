@@ -105,6 +105,9 @@ type Upgrade struct {
 	MaxHistory int
 	// RollbackOnFailure enables rolling back the upgraded release on failure
 	RollbackOnFailure bool
+	// ShowLogsOnFailure prints recent pod logs and warning events for resources
+	// that fail to become ready, before the failure/rollback path runs.
+	ShowLogsOnFailure bool
 	// CleanupOnFail will, if true, cause the upgrade to delete newly-created resources on a failed update.
 	CleanupOnFail bool
 	// SubNotes determines whether sub-notes are rendered in the chart.
@@ -184,7 +187,7 @@ func (u *Upgrade) RunWithContext(ctx context.Context, name string, ch chart.Char
 
 	// Make sure wait is set if RollbackOnFailure. This makes it so
 	// the user doesn't have to specify both
-	if u.WaitStrategy == kube.HookOnlyStrategy && u.RollbackOnFailure {
+	if u.WaitStrategy == kube.HookOnlyStrategy && (u.RollbackOnFailure || u.ShowLogsOnFailure) {
 		u.WaitStrategy = kube.StatusWatcherStrategy
 	}
 
@@ -525,6 +528,9 @@ func (u *Upgrade) releasingUpgrade(c chan<- resultMessage, upgradedRelease *rele
 }
 
 func (u *Upgrade) failRelease(rel *release.Release, created kube.ResourceList, err error) (*release.Release, error) {
+	if u.ShowLogsOnFailure {
+		u.cfg.showFailureDiagnostics(rel, created, u.Timeout)
+	}
 	msg := fmt.Sprintf("Upgrade %q failed: %s", rel.Name, err)
 	u.cfg.Logger().Warn(
 		"upgrade failed",
