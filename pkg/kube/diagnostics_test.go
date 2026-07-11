@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
@@ -91,4 +92,35 @@ func TestCollectFailureDiagnostics_EventsForbiddenFailsOpen(t *testing.T) {
 		c.CollectFailureDiagnostics(context.Background(), resources, "ns", &buf, DefaultDiagnosticsOptions())
 	})
 	require.Contains(t, buf.String(), "could not fetch events")
+}
+
+func TestCollectFailureDiagnostics_CountAndRestarts(t *testing.T) {
+	now := metav1.Now()
+	first := metav1.NewTime(now.Time.Add(-19 * time.Minute))
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "crash-1", Namespace: "ns"},
+		Spec:       v1.PodSpec{Containers: []v1.Container{{Name: "app"}}},
+		Status: v1.PodStatus{
+			ContainerStatuses: []v1.ContainerStatus{{Name: "app", RestartCount: 12}},
+		},
+	}
+	warn := &v1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "e1", Namespace: "ns"},
+		Type:           v1.EventTypeWarning,
+		Reason:         "BackOff",
+		Message:        "Back-off restarting failed container",
+		InvolvedObject: v1.ObjectReference{Name: "crash-1", Namespace: "ns"},
+		Count:          47,
+		FirstTimestamp: first,
+		LastTimestamp:  now,
+	}
+	c := &Client{kubeClient: fake.NewClientset(pod, warn)}
+	resources := ResourceList{{Name: "crash-1", Namespace: "ns", Object: pod}}
+
+	var buf bytes.Buffer
+	c.CollectFailureDiagnostics(context.Background(), resources, "ns", &buf, DefaultDiagnosticsOptions())
+	got := buf.String()
+	require.Contains(t, got, "restarts: 12")        // pod restart count surfaced
+	require.Contains(t, got, "(x47 over")           // aggregated event count + span
+	require.Contains(t, got, "Back-off restarting") // message preserved
 }

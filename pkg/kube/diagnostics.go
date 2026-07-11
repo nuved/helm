@@ -81,7 +81,11 @@ func (c *Client) CollectFailureDiagnostics(ctx context.Context, resources Resour
 	fmt.Fprintf(out, "==> failure diagnostics (--show-logs-on-failure): %d pod(s) not ready\n", total)
 	for i := range shown {
 		p := &shown[i]
-		fmt.Fprintf(out, "==> pod/%s\n", p.Name)
+		if r := podRestarts(p); r > 0 {
+			fmt.Fprintf(out, "==> pod/%s (restarts: %d)\n", p.Name, r)
+		} else {
+			fmt.Fprintf(out, "==> pod/%s\n", p.Name)
+		}
 		c.writeWarningEvents(ctx, p.Name, p.Namespace, opts.Since, out)
 		c.writePodLogs(ctx, p, opts.TailLines, out)
 	}
@@ -181,6 +185,46 @@ func (c *Client) writeWarningEvents(ctx context.Context, name, namespace string,
 		if !since.IsZero() && e.LastTimestamp.Time.Before(since) {
 			continue
 		}
-		fmt.Fprintf(out, "    [event] Warning %s: %s\n", e.Reason, e.Message)
+		count, span := eventCountAndSpan(e)
+		switch {
+		case count > 1 && span > 0:
+			fmt.Fprintf(out, "    [event] Warning %s (x%d over %s): %s\n", e.Reason, count, span.Round(time.Second), e.Message)
+		case count > 1:
+			fmt.Fprintf(out, "    [event] Warning %s (x%d): %s\n", e.Reason, count, e.Message)
+		default:
+			fmt.Fprintf(out, "    [event] Warning %s: %s\n", e.Reason, e.Message)
+		}
 	}
+}
+
+// podRestarts sums the restart counts across a pod's containers.
+func podRestarts(p *v1.Pod) int32 {
+	var n int32
+	for _, cs := range p.Status.ContainerStatuses {
+		n += cs.RestartCount
+	}
+	return n
+}
+
+// eventCountAndSpan returns how many times an event occurred and the time span
+// it covered, handling both the legacy count fields and the newer Series field.
+func eventCountAndSpan(e v1.Event) (int32, time.Duration) {
+	count := e.Count
+	last := e.LastTimestamp.Time
+	if e.Series != nil {
+		if e.Series.Count > count {
+			count = e.Series.Count
+		}
+		if !e.Series.LastObservedTime.IsZero() {
+			last = e.Series.LastObservedTime.Time
+		}
+	}
+	if count < 1 {
+		count = 1
+	}
+	span := last.Sub(e.FirstTimestamp.Time)
+	if span < 0 {
+		span = 0
+	}
+	return count, span
 }
