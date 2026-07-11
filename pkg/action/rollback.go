@@ -59,6 +59,13 @@ type Rollback struct {
 	ServerSideApply string
 	CleanupOnFail   bool
 	MaxHistory      int // MaxHistory limits the maximum number of revisions saved per release
+	// ToLastDeployed rolls back to the last successfully DEPLOYED revision
+	// instead of the immediately previous one.
+	ToLastDeployed bool
+	// RecoverPending clears a release stuck in a pending state (e.g. Helm was
+	// killed mid-operation) by marking it failed before rolling back. Only safe
+	// when no other Helm operation is running against the release.
+	RecoverPending bool
 }
 
 // NewRollback creates a new Rollback object with the given configuration.
@@ -126,9 +133,29 @@ func (r *Rollback) prepareRollback(name string) (*release.Release, *release.Rele
 		return nil, nil, false, err
 	}
 
+	if r.RecoverPending && currentRelease.Info.Status.IsPending() {
+		r.cfg.Logger().Debug("recover-pending: marking stuck release failed", "name", name, "version", currentRelease.Version)
+		currentRelease.SetStatus(common.StatusFailed, "marked failed by --recover-pending")
+		if uerr := r.cfg.Releases.Update(currentRelease); uerr != nil {
+			return nil, nil, false, uerr
+		}
+	}
+
 	previousVersion := r.Version
 	if r.Version == 0 {
-		previousVersion = currentRelease.Version - 1
+		if r.ToLastDeployed {
+			deployedi, derr := r.cfg.Releases.Deployed(name)
+			if derr != nil {
+				return nil, nil, false, fmt.Errorf("no deployed (healthy) revision to roll back to for release %q; if the release is unrecoverable, use 'helm uninstall %s': %w", name, name, derr)
+			}
+			deployed, cerr := releaserToV1Release(deployedi)
+			if cerr != nil {
+				return nil, nil, false, cerr
+			}
+			previousVersion = deployed.Version
+		} else {
+			previousVersion = currentRelease.Version - 1
+		}
 	}
 
 	historyReleases, err := r.cfg.Releases.History(name)
